@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import { flushSync } from 'react-dom'
 import {
   RadarChart,
   Radar,
@@ -16,11 +17,11 @@ const SCORE_LABELS = ['None', 'Aware', 'Basic', 'Competent', 'Advanced', 'Expert
 
 const SCORE_SELECTED_CLS = [
   'bg-gray-600 text-gray-200',   // 0 — None
-  'bg-amber-500 text-white',     // 1 — Aware
+  'bg-red-500 text-white',       // 1 — Aware
   'bg-orange-500 text-white',    // 2 — Basic
-  'bg-sky-600 text-white',       // 3 — Competent
+  'bg-amber-500 text-white',     // 3 — Competent
   'bg-green-500 text-white',     // 4 — Advanced
-  'bg-violet-600 text-white',    // 5 — Expert
+  'bg-emerald-600 text-white',   // 5 — Expert
 ]
 
 const SKILL_SUGGESTIONS = [
@@ -111,7 +112,8 @@ function FirstRunModal({ onComplete, onImport }) {
   }
 
   const suggestions = SKILL_SUGGESTIONS.filter((n) => !skills.find((s) => s.name === n))
-  const canComplete = snapshotName.trim().length > 0 && skills.length > 0
+  const canComplete = snapshotName.trim().length > 0 && skills.length >= 3
+  const remaining = Math.max(0, 3 - skills.length)
 
   return (
     <div className="fixed inset-0 bg-gray-950 z-50 flex items-start justify-center pt-8 px-4 pb-4">
@@ -143,7 +145,9 @@ function FirstRunModal({ onComplete, onImport }) {
                 Skills
               </label>
               {skills.length > 0 && (
-                <span className="text-xs text-gray-500">{skills.length} added</span>
+                <span className={`text-xs ${skills.length >= 3 ? 'text-green-500' : 'text-gray-500'}`}>
+                  {skills.length} / 3{skills.length >= 3 ? ' ✓' : ''}
+                </span>
               )}
             </div>
 
@@ -191,7 +195,7 @@ function FirstRunModal({ onComplete, onImport }) {
               </button>
             </div>
 
-            {skills.length > 0 ? (
+{skills.length > 0 ? (
               <div className="space-y-1.5">
                 <p className="text-xs text-gray-600">Rate your current level:</p>
                 {skills.map((skill) => (
@@ -215,7 +219,7 @@ function FirstRunModal({ onComplete, onImport }) {
               </div>
             ) : (
               <div className="py-6 text-center text-gray-700 text-sm">
-                ↑ Add skills above to get started
+                ↑ Add at least 3 skills to get started
               </div>
             )}
           </div>
@@ -228,8 +232,8 @@ function FirstRunModal({ onComplete, onImport }) {
           </label>
           <div className="flex items-center gap-3">
             <span className="text-xs text-gray-600">
-              {skills.length === 0
-                ? 'Add at least one skill'
+              {remaining > 0
+                ? `Add ${remaining} more skill${remaining === 1 ? '' : 's'}`
                 : !snapshotName.trim()
                 ? 'Enter a snapshot name'
                 : ''}
@@ -349,13 +353,15 @@ export default function App() {
   const [nextSnapshotId, setNextSnapshotId] = useState(1)
   const [importError, setImportError] = useState('')
   const [showModal, setShowModal] = useState('first')
+  const [isDirty, setIsDirty] = useState(false)
+  const skillEls = useRef({})
 
   useEffect(() => {
-    if (snapshots.length === 0) return
+    if (!isDirty) return
     const handler = (e) => { e.preventDefault(); e.returnValue = '' }
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
-  }, [snapshots.length])
+  }, [isDirty])
 
   // Always include all snapshots in radar data so toggling visibility
   // doesn't cause the axes/grid to re-render
@@ -376,6 +382,7 @@ export default function App() {
       prev.map((s) => ({ ...s, scores: { ...s.scores, [id]: 2 } }))
     )
     setNextSkillId((n) => n + 1)
+    setIsDirty(true)
     setNewSkillName('')
   }
 
@@ -388,6 +395,7 @@ export default function App() {
         return { ...s, scores }
       })
     )
+    setIsDirty(true)
   }
 
   const saveSkillEdit = () => {
@@ -396,14 +404,38 @@ export default function App() {
       prev.map((s) => (s.id === editingSkill.id ? { ...s, name: editingSkill.name.trim() } : s))
     )
     setEditingSkill(null)
+    setIsDirty(true)
   }
 
-  const moveSkill = (index, delta) => {
-    const target = index + delta
+  const moveSkill = (index, dir) => {
+    const target = index + dir
     if (target < 0 || target >= skills.length) return
-    const next = [...skills]
-    ;[next[index], next[target]] = [next[target], next[index]]
-    setSkills(next)
+
+    const before = {}
+    skills.forEach((skill) => {
+      const el = skillEls.current[skill.id]
+      if (el) before[skill.id] = el.getBoundingClientRect().top
+    })
+
+    flushSync(() => {
+      const next = [...skills]
+      ;[next[index], next[target]] = [next[target], next[index]]
+      setSkills(next)
+    })
+    setIsDirty(true)
+
+    skills.forEach((skill) => {
+      const el = skillEls.current[skill.id]
+      if (!el || before[skill.id] === undefined) return
+      const dy = before[skill.id] - el.getBoundingClientRect().top
+      if (dy === 0) return
+      el.style.transition = 'none'
+      el.style.transform = `translateY(${dy}px)`
+      requestAnimationFrame(() => {
+        el.style.transition = 'transform 150ms ease'
+        el.style.transform = ''
+      })
+    })
   }
 
   const commitFirst = (snapshotName, newSkills, scores) => {
@@ -415,6 +447,7 @@ export default function App() {
     setVisibleSnapshots([snapId])
     setSelectedSnapshot(snapId)
     setNextSnapshotId(2)
+    setIsDirty(true)
     setShowModal(null)
   }
 
@@ -424,6 +457,7 @@ export default function App() {
     setVisibleSnapshots((prev) => [...prev, id])
     setSelectedSnapshot(id)
     setNextSnapshotId((n) => n + 1)
+    setIsDirty(true)
     setShowModal(null)
   }
 
@@ -434,6 +468,7 @@ export default function App() {
       const remaining = snapshots.filter((s) => s.id !== id)
       setSelectedSnapshot(remaining.length > 0 ? remaining[0].id : null)
     }
+    setIsDirty(true)
   }
 
   const saveSnapshotEdit = () => {
@@ -444,6 +479,7 @@ export default function App() {
       )
     )
     setEditingSnapshot(null)
+    setIsDirty(true)
   }
 
   const toggleSnapshotVisibility = (id) => {
@@ -458,6 +494,7 @@ export default function App() {
         s.id === snapshotId ? { ...s, scores: { ...s.scores, [skillId]: value } } : s
       )
     )
+    setIsDirty(true)
   }
 
   const lastSnapshotScores =
@@ -473,6 +510,7 @@ export default function App() {
     a.download = 'skill-radar.json'
     a.click()
     URL.revokeObjectURL(url)
+    setIsDirty(false)
   }
 
   const handleImport = (e) => {
@@ -493,6 +531,7 @@ export default function App() {
         setSelectedSnapshot(data.snapshots[0]?.id ?? null)
         setShowModal(null)
         setImportError('')
+        setIsDirty(false)
       } catch {
         setImportError('Invalid JSON — expected { skills, snapshots }')
       }
@@ -518,7 +557,7 @@ export default function App() {
       <header className="shrink-0 border-b border-gray-800 px-5 py-3 flex items-center justify-between gap-4">
         <h1 className="text-xl font-bold tracking-tight text-blue-400">Skill Radar</h1>
         <div className="flex items-center gap-3">
-          {snapshots.length > 0 && (
+          {isDirty && (
             <span className="text-xs text-amber-600/80 hidden sm:block">
               ⚠ Data is not saved — export before closing
             </span>
@@ -550,6 +589,7 @@ export default function App() {
             {skills.map((skill, index) => (
               <li
                 key={skill.id}
+                ref={(el) => { skillEls.current[skill.id] = el }}
                 className="group flex items-center gap-1 px-2 py-1.5 rounded-lg hover:bg-gray-800 transition-colors"
               >
                 {editingSkill?.id === skill.id ? (
